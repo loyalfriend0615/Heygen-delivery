@@ -87,6 +87,14 @@ This project is a full-stack interactive dashboard built using **Next.js**, **Re
   - `users` table
   - `tenth_class_marks` table
   - `twelfth_class_marks` table
+ 
+
+
+##ScreenShot
+![image](https://github.com/user-attachments/assets/288184f4-f1a0-4bd5-b317-1ffafb03eda6)
+
+
+
 
 ### Deployment
 The project is deployed on **Vercel**. To deploy your own instance:
