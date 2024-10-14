@@ -54,7 +54,7 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="flex flex-col dark:bg-gray-900 dark:text-white h-screen overflow-x-hidden">
+    <div className="flex flex-col max-w-4xl  mx-auto dark:bg-gray-900 dark:text-white h-screen overflow-x-hidden   overflow-y-scroll scrollbar-hide">
    
 
       <div className="flex  justify-between dark:bg-gray-800 dark:text-white items-center p-3 bg-white shadow mb-6">
