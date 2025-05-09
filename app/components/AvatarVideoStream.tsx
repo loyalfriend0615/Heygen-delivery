@@ -7,11 +7,21 @@ import StreamingAvatar, {
   TaskType
 } from "@heygen/streaming-avatar";
 import { OpenAIAssistant } from '../lib/openai-assistant';
+import Link from 'next/link';
 
 interface AvatarVideoStreamProps {
   avatarName: string;
   onClose: () => void;
 }
+
+interface ChatMessage {
+  question: string;
+  response: string;
+  timestamp: string;
+}
+
+// Custom event for chat history updates
+const CHAT_HISTORY_EVENT = 'chatHistoryUpdate';
 
 export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoStreamProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -24,6 +34,49 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
   const cleanupRef = useRef<(() => void) | null>(null);
   const sessionInitPromiseRef = useRef<Promise<void> | null>(null);
   const openaiAssistantRef = useRef<OpenAIAssistant | null>(null);
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+
+  // Load chat history from localStorage on mount
+  useEffect(() => {
+    const history = localStorage.getItem('avatarChatHistory');
+    if (history) {
+      setChatHistory(JSON.parse(history));
+    }
+  }, []);
+
+  // Listen for chat history updates
+  useEffect(() => {
+    const handleChatUpdate = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      if (customEvent.detail) {
+        setChatHistory(customEvent.detail);
+      }
+    };
+
+    window.addEventListener(CHAT_HISTORY_EVENT, handleChatUpdate);
+    window.addEventListener('storage', (e) => {
+      if (e.key === 'avatarChatHistory') {
+        if (e.newValue) {
+          setChatHistory(JSON.parse(e.newValue));
+        } else {
+          setChatHistory([]);
+        }
+      }
+    });
+
+    return () => {
+      window.removeEventListener(CHAT_HISTORY_EVENT, handleChatUpdate);
+      window.removeEventListener('storage', (e) => {
+        if (e.key === 'avatarChatHistory') {
+          if (e.newValue) {
+            setChatHistory(JSON.parse(e.newValue));
+          } else {
+            setChatHistory([]);
+          }
+        }
+      });
+    };
+  }, []);
 
   // Helper function to fetch access token
   const fetchAccessToken = async (): Promise<string> => {
@@ -184,6 +237,27 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
         console.log("User question:", userInput);
         const response = await openaiAssistantRef.current.getResponse(userInput);
         console.log("OpenAI Assistant response:", response);
+
+        // Add to chat history
+        const newMessage: ChatMessage = {
+          question: userInput,
+          response: response,
+          timestamp: new Date().toLocaleString()
+        };
+        
+        // Update state and localStorage
+        const updatedHistory = [...chatHistory, newMessage];
+        setChatHistory(updatedHistory);
+        localStorage.setItem('avatarChatHistory', JSON.stringify(updatedHistory));
+        
+        // Dispatch event to notify other windows
+        const event = new CustomEvent(CHAT_HISTORY_EVENT, { 
+          detail: updatedHistory,
+          bubbles: true,
+          composed: true
+        });
+        window.dispatchEvent(event);
+
         await avatar.speak({
           text: response,
           taskType: TaskType.REPEAT,
@@ -213,41 +287,56 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
   }, []);
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg p-6 w-full max-w-2xl">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-bold">Avatar Chat</h2>
-          <button
-            onClick={terminateAvatarSession}
-            disabled={isClosing}
-            className={`text-gray-500 hover:text-gray-700 ${isClosing ? 'opacity-50 cursor-not-allowed' : ''}`}
-          >
-            {isClosing ? 'Closing...' : 'Close'}
-          </button>
-        </div>
-        
-        {error && (
-          <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-lg">
-            {error}
-          </div>
-        )}
+    <div className="fixed inset-0 bg-black flex flex-col z-50">
+      {/* Top bar with controls */}
+      <div className="absolute top-0 left-0 right-0 z-10 bg-black bg-opacity-50 p-4 flex justify-between items-center">
+        <Link 
+          href="/chat-history" 
+          target="_blank"
+          className="text-white hover:text-blue-400 transition-colors"
+          onClick={(e) => {
+            if (!e.ctrlKey) {
+              e.preventDefault();
+            }
+          }}
+        >
+          View Chat History
+        </Link>
+        <button
+          onClick={terminateAvatarSession}
+          disabled={isClosing}
+          className={`text-white hover:text-red-400 transition-colors ${isClosing ? 'opacity-50 cursor-not-allowed' : ''}`}
+        >
+          {isClosing ? 'Closing...' : 'Close'}
+        </button>
+      </div>
 
-        <div className="aspect-video bg-gray-900 rounded-lg overflow-hidden mb-4">
-          <video
-            ref={videoRef}
-            className="w-full h-full"
-            autoPlay
-            playsInline
-          />
+      {/* Error message */}
+      {error && (
+        <div className="absolute top-16 left-1/2 transform -translate-x-1/2 z-10 p-3 bg-red-100 text-red-700 rounded-lg">
+          {error}
         </div>
+      )}
 
-        <div className="flex gap-2">
+      {/* Video container */}
+      <div className="flex-1 relative">
+        <video
+          ref={videoRef}
+          className="w-full h-full object-cover"
+          autoPlay
+          playsInline
+        />
+      </div>
+
+      {/* Input container */}
+      <div className="absolute bottom-0 left-0 right-0 p-4 bg-black bg-opacity-50">
+        <div className="max-w-4xl mx-auto flex gap-2">
           <input
             type="text"
             value={userInput}
             onChange={(e) => setUserInput(e.target.value)}
             placeholder="Type your message..."
-            className="flex-1 px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="flex-1 px-4 py-2 bg-white bg-opacity-10 text-white placeholder-gray-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             onKeyPress={(e) => {
               if (e.key === 'Enter') {
                 handleSpeak();
@@ -258,7 +347,7 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
           <button
             onClick={handleSpeak}
             disabled={isClosing}
-            className={`px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 ${isClosing ? 'opacity-50 cursor-not-allowed' : ''}`}
+            className={`px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 ${isClosing ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
             Speak
           </button>
