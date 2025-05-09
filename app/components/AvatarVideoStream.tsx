@@ -30,6 +30,7 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
   const [userInput, setUserInput] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isClosing, setIsClosing] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const initializationRef = useRef<boolean>(false);
   const cleanupRef = useRef<(() => void) | null>(null);
   const sessionInitPromiseRef = useRef<Promise<void> | null>(null);
@@ -232,8 +233,11 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
 
   // Handle speaking event
   const handleSpeak = async () => {
-    if (avatar && openaiAssistantRef.current && userInput) {
+    if (avatar && openaiAssistantRef.current && userInput && !isLoading) {
       try {
+        setIsLoading(true);
+        setUserInput(''); // Clear input immediately
+        
         console.log("User question:", userInput);
         const response = await openaiAssistantRef.current.getResponse(userInput);
         console.log("OpenAI Assistant response:", response);
@@ -262,10 +266,11 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
           text: response,
           taskType: TaskType.REPEAT,
         });
-        setUserInput('');
       } catch (error) {
         console.error('Failed to speak:', error);
         setError('Failed to send message');
+      } finally {
+        setIsLoading(false);
       }
     }
   };
@@ -335,21 +340,33 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
             type="text"
             value={userInput}
             onChange={(e) => setUserInput(e.target.value)}
-            placeholder="Type your message..."
-            className="flex-1 px-4 py-2 bg-white bg-opacity-10 text-white placeholder-gray-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            placeholder={isLoading ? "Waiting for response..." : "Type your message..."}
+            className="flex-1 px-4 py-2 bg-white bg-opacity-10 text-white placeholder-gray-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
             onKeyPress={(e) => {
-              if (e.key === 'Enter') {
+              if (e.key === 'Enter' && !isLoading) {
                 handleSpeak();
               }
             }}
-            disabled={isClosing}
+            disabled={isLoading || isClosing}
           />
           <button
             onClick={handleSpeak}
-            disabled={isClosing}
-            className={`px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 ${isClosing ? 'opacity-50 cursor-not-allowed' : ''}`}
+            disabled={isLoading || isClosing || !userInput.trim()}
+            className={`px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all duration-200 ${
+              isLoading || isClosing || !userInput.trim() ? 'opacity-50 cursor-not-allowed' : ''
+            }`}
           >
-            Speak
+            {isLoading ? (
+              <div className="flex items-center gap-2">
+                <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <span>Processing...</span>
+              </div>
+            ) : (
+              'Speak'
+            )}
           </button>
         </div>
       </div>
