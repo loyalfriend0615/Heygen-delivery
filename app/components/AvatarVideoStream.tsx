@@ -4,7 +4,9 @@ import { useEffect, useRef, useState } from 'react';
 import StreamingAvatar, {
   AvatarQuality,
   StreamingEvents,
+  TaskType
 } from "@heygen/streaming-avatar";
+import { OpenAIAssistant } from '../lib/openai-assistant';
 
 interface AvatarVideoStreamProps {
   avatarName: string;
@@ -21,6 +23,7 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
   const initializationRef = useRef<boolean>(false);
   const cleanupRef = useRef<(() => void) | null>(null);
   const sessionInitPromiseRef = useRef<Promise<void> | null>(null);
+  const openaiAssistantRef = useRef<OpenAIAssistant | null>(null);
 
   // Helper function to fetch access token
   const fetchAccessToken = async (): Promise<string> => {
@@ -71,6 +74,18 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
         setError(null);
         const token = await fetchAccessToken();
         const newAvatar = new StreamingAvatar({ token });
+
+        // Initialize OpenAI Assistant
+        const openaiApiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY;
+        const openaiAssistantId = process.env.NEXT_PUBLIC_OPENAI_ASSISTANT_ID;
+        
+        if (!openaiApiKey || !openaiAssistantId) {
+          throw new Error('OpenAI API key or Assistant ID not set in environment variables');
+        }
+
+        const openaiAssistant = new OpenAIAssistant(openaiApiKey, openaiAssistantId);
+        await openaiAssistant.initialize();
+        openaiAssistantRef.current = openaiAssistant;
 
         // Set up event listeners
         const handleStreamReady = (event: any) => {
@@ -150,6 +165,7 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
       setSessionData(null);
       initializationRef.current = false;
       sessionInitPromiseRef.current = null;
+      openaiAssistantRef.current = null;
       
       // Finally close the modal
       onClose();
@@ -163,10 +179,14 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
 
   // Handle speaking event
   const handleSpeak = async () => {
-    if (avatar && userInput) {
+    if (avatar && openaiAssistantRef.current && userInput) {
       try {
+        console.log("User question:", userInput);
+        const response = await openaiAssistantRef.current.getResponse(userInput);
+        console.log("OpenAI Assistant response:", response);
         await avatar.speak({
-          text: userInput,
+          text: response,
+          taskType: TaskType.REPEAT,
         });
         setUserInput('');
       } catch (error) {
@@ -188,6 +208,7 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
       }
       initializationRef.current = false;
       sessionInitPromiseRef.current = null;
+      openaiAssistantRef.current = null;
     };
   }, []);
 
