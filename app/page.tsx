@@ -5,10 +5,12 @@ import { supabase } from '@/lib/supabaseClient';
 import { useRouter } from 'next/navigation';
 import DarkModeToggle from './DarkModeToggle';
 import ClipLoader from 'react-spinners/ClipLoader';
+import AvatarVideoStream from './components/AvatarVideoStream';
 
 export default function Dashboard() {
   const [avatars, setAvatars] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [selectedAvatar, setSelectedAvatar] = useState<string | null>(null);
   const router = useRouter();
 
   useEffect(() => {
@@ -42,10 +44,11 @@ export default function Dashboard() {
     }
   };
 
-  // Placeholder for avatar interactions
+  // Handle chat with avatar
   const handleChat = (avatar_id: string) => {
-    alert(`Chat with avatar: ${avatar_id}`);
+    setSelectedAvatar(avatar_id);
   };
+
   const handleMenu = (avatar_id: string) => {
     alert(`Menu for avatar: ${avatar_id}`);
   };
@@ -119,6 +122,14 @@ export default function Dashboard() {
           </div>
         ))}
       </div>
+
+      {/* Avatar Video Stream Modal */}
+      {selectedAvatar && (
+        <AvatarVideoStream
+          avatarName={selectedAvatar}
+          onClose={() => setSelectedAvatar(null)}
+        />
+      )}
     </div>
   );
 }

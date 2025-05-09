@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@heygen/streaming-avatar": "^2.0.14",
     "@supabase/supabase-js": "^2.45.4",
     "axios": "^1.7.7",
     "next": "^14.2.28",
