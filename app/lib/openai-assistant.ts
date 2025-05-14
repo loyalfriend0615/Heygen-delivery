@@ -1,5 +1,28 @@
 import OpenAI from "openai";
 
+function sanitizeAssistantResponse(response: string): string {
+  // Remove all 【...】 patterns (citations)
+  response = response.replace(/【[^】]+】/g, '');
+  // Remove trailing [1], (1), etc.
+  response = response.replace(/\s*\[\d+\]$/g, '').replace(/\s*\([^\)]*\)$/g, '');
+  // Cut off at the first code block or markdown symbol
+  const cutSymbols = ['```', '~~~', '**', '__', '==', '--', '##', '###', '=>', '{', '}', '[', ']', '<', '>', ';', '|', '---'];
+  let minIdx = response.length;
+  for (const sym of cutSymbols) {
+    const idx = response.indexOf(sym);
+    if (idx !== -1 && idx < minIdx) minIdx = idx;
+  }
+  // Also cut off at the first line that looks like a list or table
+  const lines = response.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s*[-*#]|\|/.test(lines[i]) || /^[\s\d]*[\-\*\.]\s/.test(lines[i])) {
+      minIdx = Math.min(minIdx, response.indexOf(lines[i]));
+      break;
+    }
+  }
+  return response.slice(0, minIdx).trim();
+}
+
 export class OpenAIAssistant {
   private client: OpenAI;
   private assistantId: string;
@@ -40,7 +63,7 @@ export class OpenAIAssistant {
       const lastMessage = messages.data.find((msg) => msg.role === "assistant");
 
       if (lastMessage && lastMessage.content[0].type === "text") {
-        return lastMessage.content[0].text.value;
+        return sanitizeAssistantResponse(lastMessage.content[0].text.value);
       }
     }
 
