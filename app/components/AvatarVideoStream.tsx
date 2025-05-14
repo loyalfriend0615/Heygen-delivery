@@ -541,11 +541,11 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
   return (
     <div className="fixed inset-0 bg-black flex flex-col z-50">
       {/* Top bar with controls */}
-      <div className="absolute top-0 left-0 right-0 z-10 bg-black bg-opacity-50 p-4 flex justify-between items-center">
+      <div className="absolute top-0 left-0 right-0 z-10 flex justify-between items-center px-6 py-4">
         <Link 
           href="/chat-interface" 
           target="_blank"
-          className="text-white hover:text-blue-400 transition-colors"
+          className="bg-black/60 text-white rounded-lg px-4 py-2 hover:text-blue-400 hover:bg-black/80 transition-colors"
           onClick={(e) => {
             if (!e.ctrlKey) {
               e.preventDefault();
@@ -557,7 +557,7 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
         <button
           onClick={terminateAvatarSession}
           disabled={isClosing}
-          className={`text-white hover:text-red-400 transition-colors ${isClosing ? 'opacity-50 cursor-not-allowed' : ''}`}
+          className={`bg-black/60 text-white rounded-lg px-4 py-2 hover:text-red-400 hover:bg-black/80 transition-colors ${isClosing ? 'opacity-50 cursor-not-allowed' : ''}`}
         >
           {isClosing ? 'Closing...' : 'Close'}
         </button>
