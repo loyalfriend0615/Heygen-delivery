@@ -20,64 +20,77 @@ interface ChatMessage {
   timestamp: string;
 }
 
-// Custom event for chat history updates
+// Custom events for communication
 const CHAT_HISTORY_EVENT = 'chatHistoryUpdate';
+const AVATAR_READY_EVENT = 'avatarReady';
+const CHAT_REQUEST_EVENT = 'chatRequest';
+const AVATAR_SPEAKING_STARTED = 'avatarSpeakingStarted';
+const AVATAR_SPEAKING_ENDED = 'avatarSpeakingEnded';
+
+// Chroma keying utility
+function applyChromaKey(
+  sourceVideo: HTMLVideoElement,
+  targetCanvas: HTMLCanvasElement,
+  options: { minHue: number; maxHue: number; minSaturation: number; threshold: number }
+) {
+  const ctx = targetCanvas.getContext('2d', { willReadFrequently: true, alpha: true });
+  if (!ctx || sourceVideo.readyState < 2) return;
+  targetCanvas.width = sourceVideo.videoWidth;
+  targetCanvas.height = sourceVideo.videoHeight;
+  ctx.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
+  ctx.drawImage(sourceVideo, 0, 0, targetCanvas.width, targetCanvas.height);
+  const imageData = ctx.getImageData(0, 0, targetCanvas.width, targetCanvas.height);
+  const data = imageData.data;
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    // Convert RGB to HSV
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const delta = max - min;
+    let h = 0;
+    if (delta === 0) h = 0;
+    else if (max === r) h = ((g - b) / delta) % 6;
+    else if (max === g) h = (b - r) / delta + 2;
+    else h = (r - g) / delta + 4;
+    h = Math.round(h * 60);
+    if (h < 0) h += 360;
+    const s = max === 0 ? 0 : delta / max;
+    const v = max / 255;
+    // Chroma key: set green pixels to black
+    const isGreen =
+      h >= options.minHue &&
+      h <= options.maxHue &&
+      s > options.minSaturation &&
+      v > 0.15 &&
+      g > r * options.threshold &&
+      g > b * options.threshold;
+    if (isGreen) {
+      data[i] = 0;     // R
+      data[i + 1] = 0; // G
+      data[i + 2] = 0; // B
+      data[i + 3] = 255; // Opaque black
+    }
+  }
+  ctx.putImageData(imageData, 0, 0);
+}
 
 export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoStreamProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const [avatar, setAvatar] = useState<StreamingAvatar | null>(null);
   const [sessionData, setSessionData] = useState<any>(null);
-  const [userInput, setUserInput] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isClosing, setIsClosing] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
   const initializationRef = useRef<boolean>(false);
   const cleanupRef = useRef<(() => void) | null>(null);
   const sessionInitPromiseRef = useRef<Promise<void> | null>(null);
   const openaiAssistantRef = useRef<OpenAIAssistant | null>(null);
-  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
-
-  // Load chat history from localStorage on mount
-  useEffect(() => {
-    const history = localStorage.getItem('avatarChatHistory');
-    if (history) {
-      setChatHistory(JSON.parse(history));
-    }
-  }, []);
-
-  // Listen for chat history updates
-  useEffect(() => {
-    const handleChatUpdate = (e: Event) => {
-      const customEvent = e as CustomEvent;
-      if (customEvent.detail) {
-        setChatHistory(customEvent.detail);
-      }
-    };
-
-    window.addEventListener(CHAT_HISTORY_EVENT, handleChatUpdate);
-    window.addEventListener('storage', (e) => {
-      if (e.key === 'avatarChatHistory') {
-        if (e.newValue) {
-          setChatHistory(JSON.parse(e.newValue));
-        } else {
-          setChatHistory([]);
-        }
-      }
-    });
-
-    return () => {
-      window.removeEventListener(CHAT_HISTORY_EVENT, handleChatUpdate);
-      window.removeEventListener('storage', (e) => {
-        if (e.key === 'avatarChatHistory') {
-          if (e.newValue) {
-            setChatHistory(JSON.parse(e.newValue));
-          } else {
-            setChatHistory([]);
-          }
-        }
-      });
-    };
-  }, []);
+  const pendingChatRequestsRef = useRef<{ question: string; timestamp: number }[]>([]);
+  const isReadyRef = useRef<boolean>(false);
+  const chromaKeyConfigRef = useRef({ minHue: 103, maxHue: 337, minSaturation: 0.75, threshold: 1.0 });
+  const chromaKeyStopRef = useRef<() => void>();
 
   // Helper function to fetch access token
   const fetchAccessToken = async (): Promise<string> => {
@@ -110,51 +123,149 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
     return data.token;
   };
 
-  // Initialize streaming avatar session
-  const initializeAvatarSession = async () => {
-    // If we already have a session initialization in progress, return that promise
-    if (sessionInitPromiseRef.current) {
-      return sessionInitPromiseRef.current;
+  // Initialize OpenAI Assistant
+  const initializeOpenAI = async () => {
+    const openaiApiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY;
+    const openaiAssistantId = process.env.NEXT_PUBLIC_OPENAI_ASSISTANT_ID;
+    
+    if (!openaiApiKey || !openaiAssistantId) {
+      throw new Error('OpenAI API key or Assistant ID not set in environment variables');
     }
 
-    // If we're already initialized, don't create a new session
-    if (initializationRef.current) {
+    try {
+      const assistant = new OpenAIAssistant(openaiApiKey, openaiAssistantId);
+      await assistant.initialize();
+      openaiAssistantRef.current = assistant;
+    } catch (error) {
+      console.error('Failed to initialize OpenAI Assistant:', error);
+      throw error;
+    }
+  };
+
+  // Process pending chat requests
+  const processPendingChatRequests = async () => {
+    console.log("[AvatarVideoStream] Checking pending chat requests:", pendingChatRequestsRef.current.length);
+    if (!isReadyRef.current) {
+      console.log("[AvatarVideoStream] Components not ready for processing pending requests");
       return;
     }
 
-    // Create a new initialization promise
+    console.log("[AvatarVideoStream] Processing pending requests with avatar:", !!avatar, "OpenAI:", !!openaiAssistantRef.current);
+    
+    while (pendingChatRequestsRef.current.length > 0) {
+      const request = pendingChatRequestsRef.current.shift();
+      if (request) {
+        console.log("[AvatarVideoStream] Processing pending chat request:", request.question);
+        try {
+          const response = await openaiAssistantRef.current?.getResponse(request.question);
+          if (!response) {
+            console.error("[AvatarVideoStream] No response from OpenAI Assistant");
+            continue;
+          }
+          console.log("[AvatarVideoStream] OpenAI Assistant response:", response);
+
+          // Add to chat history
+          const newMessage: ChatMessage = {
+            question: request.question,
+            response,
+            timestamp: new Date().toLocaleString()
+          };
+          
+          // Update localStorage
+          const history = localStorage.getItem('avatarChatHistory');
+          const chatHistory = history ? JSON.parse(history) : [];
+          const updatedHistory = [...chatHistory, newMessage];
+          localStorage.setItem('avatarChatHistory', JSON.stringify(updatedHistory));
+          
+          // Dispatch event to notify other windows
+          console.log("[AvatarVideoStream] Updating chat history");
+          const event = new CustomEvent(CHAT_HISTORY_EVENT, { 
+            detail: updatedHistory,
+            bubbles: true,
+            composed: true
+          });
+          window.dispatchEvent(event);
+
+          // Make avatar speak
+          console.log("[AvatarVideoStream] Making avatar speak response");
+          try {
+            const currentAvatar = (window as any).avatar;
+            if (!currentAvatar) {
+              throw new Error("Avatar not available");
+            }
+            // Set localStorage for speaking started
+            console.log("[AvatarVideoStream] Setting avatarSpeakingStatus to started");
+            localStorage.setItem('avatarSpeakingStatus', JSON.stringify({ status: 'started', question: request.question }));
+            await currentAvatar.speak({
+              text: response,
+              taskType: TaskType.REPEAT
+            });
+            // Set localStorage for speaking ended
+            console.log("[AvatarVideoStream] Setting avatarSpeakingStatus to ended");
+            localStorage.setItem('avatarSpeakingStatus', JSON.stringify({ status: 'ended', question: request.question }));
+            console.log("[AvatarVideoStream] Avatar finished speaking");
+          } catch (speakError) {
+            console.error("[AvatarVideoStream] Failed to make avatar speak:", speakError);
+            setError("Failed to make avatar speak");
+            // Set localStorage for speaking ended (error case)
+            console.log("[AvatarVideoStream] Setting avatarSpeakingStatus to ended (error case)");
+            localStorage.setItem('avatarSpeakingStatus', JSON.stringify({ status: 'ended', question: request.question }));
+          }
+        } catch (error) {
+          console.error("[AvatarVideoStream] Failed to process pending request:", error);
+          setError("Failed to process pending request");
+        }
+      }
+    }
+  };
+
+  // Initialize streaming avatar session
+  const initializeAvatarSession = async () => {
+    console.log("[AvatarVideoStream] Starting avatar session initialization");
+    if (sessionInitPromiseRef.current) {
+      console.log("[AvatarVideoStream] Session initialization already in progress");
+      return sessionInitPromiseRef.current;
+    }
+
+    if (initializationRef.current) {
+      console.log("[AvatarVideoStream] Session already initialized");
+      return;
+    }
+
     sessionInitPromiseRef.current = (async () => {
       try {
         setError(null);
-        const token = await fetchAccessToken();
-        const newAvatar = new StreamingAvatar({ token });
-
-        // Initialize OpenAI Assistant
-        const openaiApiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY;
-        const openaiAssistantId = process.env.NEXT_PUBLIC_OPENAI_ASSISTANT_ID;
         
-        if (!openaiApiKey || !openaiAssistantId) {
-          throw new Error('OpenAI API key or Assistant ID not set in environment variables');
-        }
-
-        const openaiAssistant = new OpenAIAssistant(openaiApiKey, openaiAssistantId);
-        await openaiAssistant.initialize();
-        openaiAssistantRef.current = openaiAssistant;
+        // Initialize OpenAI Assistant first
+        console.log("[AvatarVideoStream] Initializing OpenAI Assistant");
+        await initializeOpenAI();
+        console.log("[AvatarVideoStream] OpenAI Assistant initialized");
+        
+        // Then initialize avatar
+        console.log("[AvatarVideoStream] Fetching access token");
+        const token = await fetchAccessToken();
+        console.log("[AvatarVideoStream] Access token received");
+        
+        console.log("[AvatarVideoStream] Creating new avatar instance");
+        const newAvatar = new StreamingAvatar({ token });
 
         // Set up event listeners
         const handleStreamReady = (event: any) => {
+          console.log("[AvatarVideoStream] Stream ready event received");
           if (event.detail && videoRef.current) {
             videoRef.current.srcObject = event.detail;
             videoRef.current.onloadedmetadata = () => {
+              console.log("[AvatarVideoStream] Video metadata loaded");
               videoRef.current?.play().catch(console.error);
             };
           } else {
-            console.error("Stream is not available");
+            console.error("[AvatarVideoStream] Stream is not available");
             setError("Stream is not available");
           }
         };
 
         const handleStreamDisconnected = () => {
+          console.log("[AvatarVideoStream] Stream disconnected");
           if (videoRef.current) {
             videoRef.current.srcObject = null;
           }
@@ -166,28 +277,51 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
         newAvatar.on(StreamingEvents.STREAM_READY, handleStreamReady);
         newAvatar.on(StreamingEvents.STREAM_DISCONNECTED, handleStreamDisconnected);
         
+        console.log("[AvatarVideoStream] Creating avatar session");
         const newSessionData = await newAvatar.createStartAvatar({
           quality: AvatarQuality.High,
           avatarName,
         });
 
-        console.log("Session data:", newSessionData);
-        setAvatar(newAvatar);
-        setSessionData(newSessionData);
-        initializationRef.current = true;
-
+        console.log("[AvatarVideoStream] Session data received:", newSessionData);
+        
         // Store cleanup function
         cleanupRef.current = () => {
+          console.log("[AvatarVideoStream] Running cleanup");
           newAvatar.off(StreamingEvents.STREAM_READY, handleStreamReady);
           newAvatar.off(StreamingEvents.STREAM_DISCONNECTED, handleStreamDisconnected);
           if (videoRef.current) {
             videoRef.current.srcObject = null;
           }
         };
+
+        // Store avatar instance globally and dispatch event
+        console.log("[AvatarVideoStream] Storing avatar instance globally");
+        (window as any).avatar = newAvatar;
+        window.dispatchEvent(new CustomEvent(AVATAR_READY_EVENT, {
+          detail: newAvatar,
+          bubbles: true,
+          composed: true
+        }));
+        console.log("[AvatarVideoStream] Avatar ready event dispatched");
+
+        // Set the avatar state
+        setAvatar(newAvatar);
+        setSessionData(newSessionData);
+        initializationRef.current = true;
+
+        // Set ready state immediately since we have the avatar instance
+        isReadyRef.current = true;
+        console.log("[AvatarVideoStream] Components ready for processing requests");
+        
+        // Process any pending chat requests
+        console.log("[AvatarVideoStream] Processing pending chat requests");
+        await processPendingChatRequests();
       } catch (error) {
-        console.error('Failed to initialize avatar session:', error);
+        console.error('[AvatarVideoStream] Failed to initialize avatar session:', error);
         setError(error instanceof Error ? error.message : 'Failed to initialize avatar session');
         initializationRef.current = false;
+        isReadyRef.current = false;
       } finally {
         sessionInitPromiseRef.current = null;
       }
@@ -218,8 +352,12 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
       setAvatar(null);
       setSessionData(null);
       initializationRef.current = false;
+      isReadyRef.current = false;
       sessionInitPromiseRef.current = null;
       openaiAssistantRef.current = null;
+      
+      // Remove global avatar instance
+      delete (window as any).avatar;
       
       // Finally close the modal
       onClose();
@@ -231,54 +369,83 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
     }
   };
 
-  // Handle speaking event
-  const handleSpeak = async () => {
-    if (avatar && openaiAssistantRef.current && userInput && !isLoading) {
-      try {
-        setIsLoading(true);
-        setUserInput(''); // Clear input immediately
-        
-        console.log("User question:", userInput);
-        const response = await openaiAssistantRef.current.getResponse(userInput);
-        console.log("OpenAI Assistant response:", response);
-
-        // Add to chat history
-        const newMessage: ChatMessage = {
-          question: userInput,
-          response: response,
-          timestamp: new Date().toLocaleString()
-        };
-        
-        // Update state and localStorage
-        const updatedHistory = [...chatHistory, newMessage];
-        setChatHistory(updatedHistory);
-        localStorage.setItem('avatarChatHistory', JSON.stringify(updatedHistory));
-        
-        // Dispatch event to notify other windows
-        const event = new CustomEvent(CHAT_HISTORY_EVENT, { 
-          detail: updatedHistory,
-          bubbles: true,
-          composed: true
-        });
-        window.dispatchEvent(event);
-
-        await avatar.speak({
-          text: response,
-          taskType: TaskType.REPEAT,
-        });
-      } catch (error) {
-        console.error('Failed to speak:', error);
-        setError('Failed to send message');
-      } finally {
-        setIsLoading(false);
-      }
+  // Chroma key processing loop
+  const startChromaKey = () => {
+    if (!videoRef.current || !canvasRef.current) return;
+    let stopped = false;
+    function render() {
+      if (stopped) return;
+      applyChromaKey(videoRef.current!, canvasRef.current!, chromaKeyConfigRef.current);
+      requestAnimationFrame(render);
     }
+    render();
+    chromaKeyStopRef.current = () => { stopped = true; };
   };
 
+  // Listen for chroma key config changes
   useEffect(() => {
+    function updateConfigFromStorage() {
+      const stored = localStorage.getItem('chromaKeyConfig');
+      if (stored) {
+        chromaKeyConfigRef.current = JSON.parse(stored);
+      }
+    }
+    updateConfigFromStorage();
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'chromaKeyConfig') {
+        updateConfigFromStorage();
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
+
+  // Start chroma keying when video is ready
+  useEffect(() => {
+    if (!videoRef.current || !canvasRef.current) return;
+    let started = false;
+    const tryStart = () => {
+      if (
+        videoRef.current &&
+        videoRef.current.readyState >= 2 &&
+        !started
+      ) {
+        started = true;
+        startChromaKey();
+      }
+    };
+    videoRef.current.addEventListener('loadedmetadata', tryStart);
+    tryStart();
+    return () => {
+      if (chromaKeyStopRef.current) chromaKeyStopRef.current();
+      videoRef.current?.removeEventListener('loadedmetadata', tryStart);
+    };
+  }, []);
+
+  useEffect(() => {
+    console.log("[AvatarVideoStream] Component mounted");
     initializeAvatarSession();
     
+    // Listen for chat requests via storage events
+    console.log("[AvatarVideoStream] Setting up storage event listener");
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'currentChatRequest' && e.newValue) {
+        console.log("[AvatarVideoStream] Received chat request via storage");
+        try {
+          const chatRequest = JSON.parse(e.newValue);
+          handleChatRequest(new CustomEvent(CHAT_REQUEST_EVENT, {
+            detail: { question: chatRequest.question }
+          }));
+        } catch (error) {
+          console.error("[AvatarVideoStream] Failed to parse chat request:", error);
+        }
+      }
+    };
+    
+    window.addEventListener('storage', handleStorageChange);
+    
     return () => {
+      console.log("[AvatarVideoStream] Component unmounting");
       if (cleanupRef.current) {
         cleanupRef.current();
       }
@@ -286,17 +453,97 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
         avatar.stopAvatar().catch(console.error);
       }
       initializationRef.current = false;
+      isReadyRef.current = false;
       sessionInitPromiseRef.current = null;
       openaiAssistantRef.current = null;
+      delete (window as any).avatar;
+      window.removeEventListener('storage', handleStorageChange);
     };
   }, []);
+
+  // Handle chat request
+  const handleChatRequest = async (event: Event) => {
+    console.log("[AvatarVideoStream] Received chat request event");
+    const customEvent = event as CustomEvent;
+    const { question } = customEvent.detail;
+    console.log("[AvatarVideoStream] Question received:", question);
+
+    if (!isReadyRef.current) {
+      console.log("[AvatarVideoStream] Components not ready, queueing request");
+      pendingChatRequestsRef.current.push({
+        question,
+        timestamp: Date.now()
+      });
+      return;
+    }
+
+    try {
+      console.log("[AvatarVideoStream] Processing question through OpenAI Assistant");
+      const response = await openaiAssistantRef.current?.getResponse(question);
+      if (!response) {
+        throw new Error("No response from OpenAI Assistant");
+      }
+      console.log("[AvatarVideoStream] OpenAI Assistant response:", response);
+
+      // Add to chat history
+      const newMessage: ChatMessage = {
+        question,
+        response,
+        timestamp: new Date().toLocaleString()
+      };
+      
+      // Update localStorage
+      const history = localStorage.getItem('avatarChatHistory');
+      const chatHistory = history ? JSON.parse(history) : [];
+      const updatedHistory = [...chatHistory, newMessage];
+      localStorage.setItem('avatarChatHistory', JSON.stringify(updatedHistory));
+      
+      // Dispatch event to notify other windows
+      console.log("[AvatarVideoStream] Updating chat history");
+      const event = new CustomEvent(CHAT_HISTORY_EVENT, { 
+        detail: updatedHistory,
+        bubbles: true,
+        composed: true
+      });
+      window.dispatchEvent(event);
+
+      // Make avatar speak
+      console.log("[AvatarVideoStream] Making avatar speak response");
+      try {
+        const currentAvatar = (window as any).avatar;
+        if (!currentAvatar) {
+          throw new Error("Avatar not available");
+        }
+        // Set localStorage for speaking started
+        console.log("[AvatarVideoStream] Setting avatarSpeakingStatus to started");
+        localStorage.setItem('avatarSpeakingStatus', JSON.stringify({ status: 'started', question }));
+        await currentAvatar.speak({
+          text: response,
+          taskType: TaskType.REPEAT
+        });
+        // Set localStorage for speaking ended
+        console.log("[AvatarVideoStream] Setting avatarSpeakingStatus to ended");
+        localStorage.setItem('avatarSpeakingStatus', JSON.stringify({ status: 'ended', question }));
+        console.log("[AvatarVideoStream] Avatar finished speaking");
+      } catch (speakError) {
+        console.error("[AvatarVideoStream] Failed to make avatar speak:", speakError);
+        setError("Failed to make avatar speak");
+        // Set localStorage for speaking ended (error case)
+        console.log("[AvatarVideoStream] Setting avatarSpeakingStatus to ended (error case)");
+        localStorage.setItem('avatarSpeakingStatus', JSON.stringify({ status: 'ended', question }));
+      }
+    } catch (error) {
+      console.error('[AvatarVideoStream] Failed to process chat request:', error);
+      setError('Failed to process chat request');
+    }
+  };
 
   return (
     <div className="fixed inset-0 bg-black flex flex-col z-50">
       {/* Top bar with controls */}
       <div className="absolute top-0 left-0 right-0 z-10 bg-black bg-opacity-50 p-4 flex justify-between items-center">
         <Link 
-          href="/chat-history" 
+          href="/chat-interface" 
           target="_blank"
           className="text-white hover:text-blue-400 transition-colors"
           onClick={(e) => {
@@ -305,7 +552,7 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
             }
           }}
         >
-          View Chat History
+          Open Chat Interface
         </Link>
         <button
           onClick={terminateAvatarSession}
@@ -327,48 +574,14 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
       <div className="flex-1 relative">
         <video
           ref={videoRef}
-          className="w-full h-full object-cover"
+          className="w-full h-full object-cover absolute top-0 left-0"
           autoPlay
           playsInline
         />
-      </div>
-
-      {/* Input container */}
-      <div className="absolute bottom-0 left-0 right-0 p-4 bg-black bg-opacity-50">
-        <div className="max-w-4xl mx-auto flex gap-2">
-          <input
-            type="text"
-            value={userInput}
-            onChange={(e) => setUserInput(e.target.value)}
-            placeholder={isLoading ? "Waiting for response..." : "Type your message..."}
-            className="flex-1 px-4 py-2 bg-white bg-opacity-10 text-white placeholder-gray-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-            onKeyPress={(e) => {
-              if (e.key === 'Enter' && !isLoading) {
-                handleSpeak();
-              }
-            }}
-            disabled={isLoading || isClosing}
-          />
-          <button
-            onClick={handleSpeak}
-            disabled={isLoading || isClosing || !userInput.trim()}
-            className={`px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all duration-200 ${
-              isLoading || isClosing || !userInput.trim() ? 'opacity-50 cursor-not-allowed' : ''
-            }`}
-          >
-            {isLoading ? (
-              <div className="flex items-center gap-2">
-                <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                <span>Processing...</span>
-              </div>
-            ) : (
-              'Speak'
-            )}
-          </button>
-        </div>
+        <canvas
+          ref={canvasRef}
+          className="w-full h-full object-cover absolute top-0 left-0 pointer-events-none"
+        />
       </div>
     </div>
   );
