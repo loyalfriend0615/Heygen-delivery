@@ -1,9 +1,13 @@
 'use client';
 
 import { useEffect, useState, useRef } from 'react';
+import { Mic, MessageSquare, Send, Play, Square } from "lucide-react";
 import Toast from '../components/Toast';
 import AvatarVideoStream from '../components/AvatarVideoStream';
 import ChromaKeyPanel from '../components/ChromaKeyPanel';
+import AudioHandler from '../components/AudioHandler';
+import AudioVisualizer from '../components/AudioVisualizer';
+import AudioSignalAnimation from '../components/AudioSignalAnimation';
 
 // Custom events for communication
 const CHAT_HISTORY_EVENT = 'chatHistoryUpdate';
@@ -23,6 +27,9 @@ export default function ChatInterface() {
   const [error, setError] = useState<string | null>(null);
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
+  const [mode, setMode] = useState<'text' | 'audio'>('text');
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingStatus, setRecordingStatus] = useState('');
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const currentQuestionRef = useRef<string>('');
@@ -39,10 +46,8 @@ export default function ChatInterface() {
   useEffect(() => {
     const handleChatHistoryUpdate = (event: Event) => {
       const customEvent = event as CustomEvent;
-      // Always set the chat history to the new array from the event
       setChatHistory([...customEvent.detail]);
     };
-
     window.addEventListener(CHAT_HISTORY_EVENT, handleChatHistoryUpdate);
     return () => window.removeEventListener(CHAT_HISTORY_EVENT, handleChatHistoryUpdate);
   }, []);
@@ -53,7 +58,6 @@ export default function ChatInterface() {
       if (event.key === 'avatarSpeakingStatus' && event.newValue) {
         try {
           const { status, question } = JSON.parse(event.newValue);
-          console.log('[ChatInterface] Storage event:', status, question);
           if (question === currentQuestionRef.current) {
             if (status === 'started') {
               setIsLoading(true);
@@ -62,9 +66,7 @@ export default function ChatInterface() {
               currentQuestionRef.current = '';
             }
           }
-        } catch (e) {
-          // Ignore parse errors
-        }
+        } catch (e) {}
       }
     };
     window.addEventListener('storage', handleStorage);
@@ -92,19 +94,32 @@ export default function ChatInterface() {
     return () => clearInterval(interval);
   }, []);
 
+  // --- Mode toggle logic ---
+  const toggleMode = () => {
+    setMode((prev) => (prev === 'text' ? 'audio' : 'text'));
+    if (isRecording) setIsRecording(false);
+  };
+
+  // --- Send/Record button logic ---
+  const handleSendOrRecord = () => {
+    if (mode === 'text') {
+      handleSpeak();
+    } else {
+      if (isRecording) {
+        setIsRecording(false);
+      } else {
+        setIsRecording(true);
+      }
+    }
+  };
+
+  // --- Chat logic (same as before) ---
   const handleSpeak = async () => {
     if (!userInput.trim()) return;
-
     try {
-      console.log("[ChatInterface] Sending chat request:", userInput);
-      
-      // Store the current input before clearing it
       const currentInput = userInput;
-      currentQuestionRef.current = currentInput; // Store the current question
-      console.log("[ChatInterface] Stored current question:", currentQuestionRef.current);
+      currentQuestionRef.current = currentInput;
       setUserInput('');
-      
-      // Optimistically add the question to chat history with a placeholder response
       setChatHistory(prev => [
         ...prev,
         {
@@ -113,44 +128,54 @@ export default function ChatInterface() {
           timestamp: new Date().toLocaleString()
         }
       ]);
-      
-      // Store chat request in localStorage
       localStorage.setItem('currentChatRequest', JSON.stringify({
         question: currentInput,
         timestamp: Date.now()
       }));
-      console.log("[ChatInterface] Chat request stored in localStorage");
-      
-      // Show loading state
       setIsLoading(true);
     } catch (error) {
-      console.error('[ChatInterface] Failed to send message:', error);
       setError('Failed to send message');
       setToastMessage('Failed to send message');
       setShowToast(true);
       setIsLoading(false);
-      currentQuestionRef.current = ''; // Clear the current question on error
+      currentQuestionRef.current = '';
     }
   };
 
-  const clearHistory = () => {
-    setShowToast(true);
+  const handleTranscriptionComplete = async (text: string) => {
+    if (!text.trim()) return;
+    try {
+      currentQuestionRef.current = text;
+      setChatHistory(prev => [
+        ...prev,
+        {
+          question: text,
+          response: '...',
+          timestamp: new Date().toLocaleString()
+        }
+      ]);
+      localStorage.setItem('currentChatRequest', JSON.stringify({
+        question: text,
+        timestamp: Date.now()
+      }));
+      setIsLoading(true);
+      setUserInput('');
+    } catch (error) {
+      setError('Failed to send transcribed message');
+      setToastMessage('Failed to send transcribed message');
+      setShowToast(true);
+      setIsLoading(false);
+      currentQuestionRef.current = '';
+    }
   };
 
+  const clearHistory = () => setShowToast(true);
   const handleConfirmClear = () => {
     try {
-      // Clear localStorage
       localStorage.removeItem('avatarChatHistory');
-      // Clear state
       setChatHistory([]);
-      // Dispatch event to notify other windows
-      const event = new CustomEvent(CHAT_HISTORY_EVENT, { 
-        detail: [],
-        bubbles: true,
-        composed: true
-      });
+      const event = new CustomEvent(CHAT_HISTORY_EVENT, { detail: [], bubbles: true, composed: true });
       window.dispatchEvent(event);
-      // Also dispatch a storage event to ensure all windows are updated
       window.dispatchEvent(new StorageEvent('storage', {
         key: 'avatarChatHistory',
         newValue: null,
@@ -158,16 +183,12 @@ export default function ChatInterface() {
         storageArea: localStorage,
         url: window.location.href
       }));
-      // Hide toast
       setShowToast(false);
     } catch (error) {
       console.error('Failed to clear history:', error);
     }
   };
-
-  const handleCancelClear = () => {
-    setShowToast(false);
-  };
+  const handleCancelClear = () => setShowToast(false);
 
   return (
     <div className="min-h-screen bg-gray-100 p-8">
@@ -204,45 +225,80 @@ export default function ChatInterface() {
           <div ref={bottomRef} />
         </div>
 
-        {/* Input Interface */}
+        {/* Input Interface - v0 style */}
         <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t">
-          <div className="max-w-4xl mx-auto flex gap-2 items-center">
-            <input
-              type="text"
-              value={userInput}
-              onChange={(e) => setUserInput(e.target.value)}
-              placeholder={isLoading ? "Waiting for response..." : "Type your message..."}
-              className="flex-1 px-4 py-2 bg-gray-100 text-gray-800 placeholder-gray-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-              onKeyPress={(e) => {
-                if (e.key === 'Enter' && !isLoading) {
-                  handleSpeak();
-                }
-              }}
-              disabled={isLoading}
-            />
+          <div className="flex items-center w-full max-w-3xl mx-auto gap-2">
+            {/* Mode toggle button (left) */}
             <button
-              onClick={handleSpeak}
-              disabled={isLoading || !userInput.trim()}
-              className={`px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all duration-200 ${
-                isLoading || !userInput.trim() ? 'opacity-50 cursor-not-allowed' : ''
-              }`}
+              className="h-12 w-12 rounded-lg bg-white border border-gray-200 flex items-center justify-center hover:bg-gray-100 transition-colors"
+              onClick={toggleMode}
+              aria-label={mode === 'text' ? 'Switch to Audio' : 'Switch to Chat'}
+              type="button"
             >
-              {isLoading ? (
-                <div className="flex items-center gap-2">
-                  <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              {mode === 'text' ? <Mic className="h-5 w-5" /> : <MessageSquare className="h-5 w-5" />}
+            </button>
+
+            {/* Input field or audio visualizer */}
+            <div className="flex-1 relative bg-white rounded-lg h-12 overflow-hidden border border-gray-200">
+              {mode === 'text' ? (
+                <input
+                  type="text"
+                  value={userInput}
+                  onChange={(e) => setUserInput(e.target.value)}
+                  className="w-full h-full px-4 outline-none"
+                  placeholder="Type your message..."
+                  disabled={isLoading}
+                  onKeyPress={(e) => {
+                    if (e.key === 'Enter' && !isLoading) handleSpeak();
+                  }}
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center px-4">
+                  {isRecording ? (
+                    <AudioSignalAnimation isRecording={isRecording} />
+                  ) : (
+                    <div className="absolute inset-0 flex items-center justify-center text-gray-400">
+                      Tap to record audio
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Send/Record button (right) */}
+            <button
+              className="h-12 w-12 rounded-lg bg-white border border-gray-200 flex items-center justify-center hover:bg-gray-100 transition-colors"
+              onClick={handleSendOrRecord}
+              aria-label={mode === 'text' ? 'Send Message' : isRecording ? 'Stop Recording' : 'Start Recording'}
+              type="button"
+              disabled={isLoading || (mode === 'text' && !userInput.trim())}
+            >
+              {mode === 'text' ? (
+                isLoading ? (
+                  <svg className="animate-spin h-5 w-5 text-gray-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                   </svg>
-                  <span>Processing...</span>
-                </div>
+                ) : (
+                  <Send className="h-5 w-5" />
+                )
+              ) : isRecording ? (
+                <Square className="h-5 w-5" />
               ) : (
-                'Send'
+                <Play className="h-5 w-5" />
               )}
             </button>
             <ChromaKeyPanel />
           </div>
         </div>
       </div>
+
+      {/* Audio Handler */}
+      <AudioHandler
+        isRecording={isRecording}
+        onTranscriptionComplete={handleTranscriptionComplete}
+        onRecordingStatusChange={setRecordingStatus}
+      />
 
       {/* Toast Notification */}
       {showToast && (
@@ -251,7 +307,7 @@ export default function ChatInterface() {
           type="warning"
           onConfirm={handleConfirmClear}
           onCancel={handleCancelClear}
-          duration={0} // Don't auto-dismiss
+          duration={0}
         />
       )}
     </div>

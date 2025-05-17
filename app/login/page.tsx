@@ -27,9 +27,9 @@ const Login = () => {
     };
 
     return (
-        <div className="flex items-center dark:bg-gray-800 dark:text-white justify-center min-h-screen bg-gray-100">
-            <form onSubmit={handleLogin} className="bg-white dark:bg-gray-900 dark:text-gray-600 p-6 rounded shadow-md">
-                <h2 className="text-2xl mb-4">Login</h2>
+        <div className="flex items-center justify-center min-h-screen bg-gray-100">
+            <form onSubmit={handleLogin} className="bg-white p-6 rounded shadow-md">
+                <h2 className="text-2xl mb-4 text-gray-900">Login</h2>
                 {error && <p className="text-red-500 mb-2">{error}</p>}
                 {isLoading && <p className="text-blue-500 mb-2">Logging in...</p>}
                 <input
@@ -38,7 +38,7 @@ const Login = () => {
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="Email"
                     required
-                    className="border border-gray-300 p-2 mb-4 w-full"
+                    className="border border-gray-300 p-2 mb-4 w-full text-gray-900 placeholder-gray-500"
                 />
                 <input
                     type="password"
@@ -46,7 +46,7 @@ const Login = () => {
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="Password"
                     required
-                    className="border border-gray-300 p-2 mb-4 w-full"
+                    className="border border-gray-300 p-2 mb-4 w-full text-gray-900 placeholder-gray-500"
                 />
                 <button type="submit" className="bg-blue-500 text-white p-2 rounded w-full" disabled={isLoading}>
                     {isLoading ? 'Logging in...' : 'Login'}
