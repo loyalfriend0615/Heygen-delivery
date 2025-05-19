@@ -8,9 +8,13 @@ import StreamingAvatar, {
 } from "@heygen/streaming-avatar";
 import { OpenAIAssistant } from '../lib/openai-assistant';
 import Link from 'next/link';
+import IdleVideoPlayer from './IdleVideoPlayer';
 
 interface AvatarVideoStreamProps {
   avatarName: string;
+  idleVideoUrl: string;
+  toLiveVideoUrl: string;
+  toIdleVideoUrl: string;
   onClose: () => void;
 }
 
@@ -76,13 +80,15 @@ function applyChromaKey(
   ctx.putImageData(imageData, 0, 0);
 }
 
-export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoStreamProps) {
+export default function AvatarVideoStream({ avatarName, idleVideoUrl, toLiveVideoUrl, toIdleVideoUrl, onClose }: AvatarVideoStreamProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [avatar, setAvatar] = useState<StreamingAvatar | null>(null);
   const [sessionData, setSessionData] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [isClosing, setIsClosing] = useState(false);
+  const [showIdleVideo, setShowIdleVideo] = useState(true);
+  const [isAvatarStreamReady, setIsAvatarStreamReady] = useState(false);
   const initializationRef = useRef<boolean>(false);
   const cleanupRef = useRef<(() => void) | null>(null);
   const sessionInitPromiseRef = useRef<Promise<void> | null>(null);
@@ -91,6 +97,16 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
   const isReadyRef = useRef<boolean>(false);
   const chromaKeyConfigRef = useRef({ minHue: 103, maxHue: 337, minSaturation: 0.75, threshold: 1.0 });
   const chromaKeyStopRef = useRef<() => void>();
+  const avatarStreamRef = useRef<MediaStream | null>(null);
+  const inactivityTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const inactivityCountdownRef = useRef<number>(30);
+  const inactivityIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const [phase, setPhase] = useState<'idle' | 'to_live' | 'stream'>('idle');
+  const [pendingTransitionToLive, setPendingTransitionToLive] = useState(false);
+  const toLiveVideoRef = useRef<HTMLVideoElement>(null);
+  const toIdleVideoRef = useRef<HTMLVideoElement>(null);
+  const idleVideoRef = useRef<HTMLVideoElement>(null);
+  const [pendingResponse, setPendingResponse] = useState<{ question: string; response: string } | null>(null);
 
   // Helper function to fetch access token
   const fetchAccessToken = async (): Promise<string> => {
@@ -159,10 +175,13 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
         try {
           const response = await openaiAssistantRef.current?.getResponse(request.question);
           if (!response) {
-            console.error("[AvatarVideoStream] No response from OpenAI Assistant");
-            continue;
+            throw new Error("No response from OpenAI Assistant");
           }
           console.log("[AvatarVideoStream] OpenAI Assistant response:", response);
+
+          // Store the response for later use
+          console.log("[AvatarVideoStream] Storing response for later speaking");
+          setPendingResponse({ question: request.question, response });
 
           // Add to chat history
           const newMessage: ChatMessage = {
@@ -185,37 +204,56 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
             composed: true
           });
           window.dispatchEvent(event);
-
-          // Make avatar speak
-          console.log("[AvatarVideoStream] Making avatar speak response");
-          try {
-            const currentAvatar = (window as any).avatar;
-            if (!currentAvatar) {
-              throw new Error("Avatar not available");
-            }
-            // Set localStorage for speaking started
-            console.log("[AvatarVideoStream] Setting avatarSpeakingStatus to started");
-            localStorage.setItem('avatarSpeakingStatus', JSON.stringify({ status: 'started', question: request.question }));
-            await currentAvatar.speak({
-              text: response,
-              taskType: TaskType.REPEAT
-            });
-            // Set localStorage for speaking ended
-            console.log("[AvatarVideoStream] Setting avatarSpeakingStatus to ended");
-            localStorage.setItem('avatarSpeakingStatus', JSON.stringify({ status: 'ended', question: request.question }));
-            console.log("[AvatarVideoStream] Avatar finished speaking");
-          } catch (speakError) {
-            console.error("[AvatarVideoStream] Failed to make avatar speak:", speakError);
-            setError("Failed to make avatar speak");
-            // Set localStorage for speaking ended (error case)
-            console.log("[AvatarVideoStream] Setting avatarSpeakingStatus to ended (error case)");
-            localStorage.setItem('avatarSpeakingStatus', JSON.stringify({ status: 'ended', question: request.question }));
-          }
         } catch (error) {
           console.error("[AvatarVideoStream] Failed to process pending request:", error);
           setError("Failed to process pending request");
         }
       }
+    }
+  };
+
+  // Make avatar speak the pending response when in stream phase
+  const speakPendingResponse = async () => {
+    console.log("[AvatarVideoStream] Checking if should speak pending response:", { 
+      hasPendingResponse: !!pendingResponse, 
+      hasAvatar: !!avatar, 
+      phase 
+    });
+    
+    if (!pendingResponse || !avatar || phase !== 'stream') {
+      console.log("[AvatarVideoStream] Not ready to speak:", { 
+        pendingResponse: !!pendingResponse, 
+        avatar: !!avatar, 
+        phase 
+      });
+      return;
+    }
+
+    console.log("[AvatarVideoStream] Making avatar speak pending response");
+    try {
+      const currentAvatar = (window as any).avatar;
+      if (!currentAvatar) {
+        throw new Error("Avatar not available");
+      }
+      // Set localStorage for speaking started
+      console.log("[AvatarVideoStream] Setting avatarSpeakingStatus to started");
+      localStorage.setItem('avatarSpeakingStatus', JSON.stringify({ status: 'started', question: pendingResponse.question }));
+      await currentAvatar.speak({
+        text: pendingResponse.response,
+        taskType: TaskType.REPEAT
+      });
+      // Set localStorage for speaking ended
+      console.log("[AvatarVideoStream] Setting avatarSpeakingStatus to ended");
+      localStorage.setItem('avatarSpeakingStatus', JSON.stringify({ status: 'ended', question: pendingResponse.question }));
+      console.log("[AvatarVideoStream] Avatar finished speaking");
+      // Clear pending response after speaking
+      setPendingResponse(null);
+    } catch (speakError) {
+      console.error("[AvatarVideoStream] Failed to make avatar speak:", speakError);
+      setError("Failed to make avatar speak");
+      // Set localStorage for speaking ended (error case)
+      console.log("[AvatarVideoStream] Setting avatarSpeakingStatus to ended (error case)");
+      localStorage.setItem('avatarSpeakingStatus', JSON.stringify({ status: 'ended', question: pendingResponse.question }));
     }
   };
 
@@ -252,15 +290,18 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
         // Set up event listeners
         const handleStreamReady = (event: any) => {
           console.log("[AvatarVideoStream] Stream ready event received");
-          if (event.detail && videoRef.current) {
-            videoRef.current.srcObject = event.detail;
-            videoRef.current.onloadedmetadata = () => {
-              console.log("[AvatarVideoStream] Video metadata loaded");
-              videoRef.current?.play().catch(console.error);
-            };
+          if (event.detail) {
+            avatarStreamRef.current = event.detail;
+            // If videoRef is available (video is rendered), attach stream
+            if (videoRef.current) {
+              videoRef.current.srcObject = event.detail;
+              videoRef.current.onloadedmetadata = () => {
+                console.log("[AvatarVideoStream] Video metadata loaded");
+                videoRef.current?.play().catch(console.error);
+              };
+            }
           } else {
-            console.error("[AvatarVideoStream] Stream is not available");
-            setError("Stream is not available");
+            console.warn("[AvatarVideoStream] Stream is not available yet, will retry on next event.");
           }
         };
 
@@ -424,8 +465,6 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
 
   useEffect(() => {
     console.log("[AvatarVideoStream] Component mounted");
-    initializeAvatarSession();
-    
     // Listen for chat requests via storage events
     console.log("[AvatarVideoStream] Setting up storage event listener");
     const handleStorageChange = (e: StorageEvent) => {
@@ -441,9 +480,7 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
         }
       }
     };
-    
     window.addEventListener('storage', handleStorageChange);
-    
     return () => {
       console.log("[AvatarVideoStream] Component unmounting");
       if (cleanupRef.current) {
@@ -467,6 +504,8 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
     const customEvent = event as CustomEvent;
     const { question } = customEvent.detail;
     console.log("[AvatarVideoStream] Question received:", question);
+
+    handleChatInput();
 
     if (!isReadyRef.current) {
       console.log("[AvatarVideoStream] Components not ready, queueing request");
@@ -538,6 +577,157 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
     }
   };
 
+  // Handler: when chat input is received, set pendingTransitionToLive
+  function handleChatInput() {
+    console.log('[AvatarVideoStream][DEBUG] handleChatInput called. phase:', phase, 'pendingTransitionToLive:', pendingTransitionToLive);
+    if (phase === 'idle') {
+      setPendingTransitionToLive(true);
+      // Start avatar session creation in background immediately
+      console.log('[AvatarVideoStream][DEBUG] Starting avatar session creation immediately on user input');
+      initializeAvatarSession();
+      // Do NOT pause or end the idle video here; let it finish its loop
+    }
+  }
+
+  // Handler: when idle video ends, check if we should transition
+  function handleIdleVideoEnd() {
+    console.log('[AvatarVideoStream][DEBUG] handleIdleVideoEnd called. phase:', phase, 'pendingTransitionToLive:', pendingTransitionToLive);
+    if (phase === 'idle' && pendingTransitionToLive) {
+      console.log('[AvatarVideoStream][DEBUG] Transitioning to to_live phase');
+      setPhase('to_live');
+      setPendingTransitionToLive(false);
+      // Play to_live video
+      if (toLiveVideoRef.current) {
+        console.log('[AvatarVideoStream][DEBUG] Playing to_live video');
+        toLiveVideoRef.current.currentTime = 0;
+        toLiveVideoRef.current.play().catch(error => {
+          console.error('[AvatarVideoStream][DEBUG] Error playing to_live video:', error);
+        });
+      } else {
+        console.error('[AvatarVideoStream][DEBUG] to_live video ref is not available');
+      }
+    }
+  }
+
+  const handleIdleVideoError = (error: string) => {
+    setError(error);
+    setShowIdleVideo(false);
+  };
+
+  // Preload to_live and to_idle videos
+  useEffect(() => {
+    if (toLiveVideoUrl && toLiveVideoRef.current) {
+      toLiveVideoRef.current.src = toLiveVideoUrl;
+      toLiveVideoRef.current.load();
+    }
+    if (toIdleVideoUrl && toIdleVideoRef.current) {
+      toIdleVideoRef.current.src = toIdleVideoUrl;
+      toIdleVideoRef.current.load();
+    }
+  }, [toLiveVideoUrl, toIdleVideoUrl]);
+
+  // Handler: when to_live video ends, transition to 'stream' phase
+  function handleToLiveVideoEnd() {
+    console.log('[AvatarVideoStream][DEBUG] to_live video ended, transitioning to stream phase');
+    setPhase('stream');
+  }
+
+  // Attach stream to video when avatar stream video is present and phase is 'stream'
+  useEffect(() => {
+    if (phase === 'stream' && videoRef.current && avatarStreamRef.current) {
+      videoRef.current.srcObject = avatarStreamRef.current;
+      videoRef.current.play().catch(console.error);
+      setIsAvatarStreamReady(true);
+      const handler = () => {
+        videoRef.current?.play().catch(console.error);
+        setIsAvatarStreamReady(true);
+      };
+      videoRef.current.addEventListener('loadedmetadata', handler);
+      return () => {
+        videoRef.current?.removeEventListener('loadedmetadata', handler);
+      };
+    }
+  }, [phase]);
+
+  // Only make avatar speak when entering stream phase
+  useEffect(() => {
+    console.log('[AvatarVideoStream][DEBUG] useEffect phase:', phase);
+    if (phase === 'stream') {
+      console.log('[AvatarVideoStream][DEBUG] In stream phase, making avatar speak pending response');
+      // Add a small delay to ensure stream is ready
+      setTimeout(() => {
+        speakPendingResponse();
+      }, 1000);
+    }
+  }, [phase]);
+
+  // Helper to clear inactivity timer and interval
+  function clearInactivityTimers() {
+    if (inactivityTimeoutRef.current) clearTimeout(inactivityTimeoutRef.current);
+    if (inactivityIntervalRef.current) clearInterval(inactivityIntervalRef.current);
+  }
+
+  // Listen for avatar speaking status to start inactivity timer
+  useEffect(() => {
+    function handleStorage(e: StorageEvent) {
+      if (e.key === 'avatarSpeakingStatus' && e.newValue) {
+        try {
+          const { status } = JSON.parse(e.newValue);
+          if (status === 'ended') {
+            // Start inactivity timer
+            clearInactivityTimers();
+            inactivityCountdownRef.current = 30;
+            console.log('[InactivityTimer] Started: 30 seconds');
+            inactivityIntervalRef.current = setInterval(() => {
+              inactivityCountdownRef.current -= 1;
+              console.log(`[InactivityTimer] Countdown: ${inactivityCountdownRef.current}s`);
+            }, 1000);
+            inactivityTimeoutRef.current = setTimeout(() => {
+              console.log('[InactivityTimer] Timer expired, closing avatar stream');
+              clearInactivityTimers();
+              terminateAvatarSession();
+            }, 30000);
+          } else if (status === 'started') {
+            // Cancel inactivity timer if avatar starts speaking again
+            clearInactivityTimers();
+            console.log('[InactivityTimer] Cancelled (avatar started speaking)');
+          }
+        } catch {}
+      }
+    }
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+      clearInactivityTimers();
+    };
+  }, []);
+
+  // Reset inactivity timer on user interaction
+  useEffect(() => {
+    function resetInactivityTimer() {
+      if (inactivityTimeoutRef.current) {
+        clearInactivityTimers();
+        inactivityCountdownRef.current = 30;
+        console.log('[InactivityTimer] Reset to 30 seconds (user interaction)');
+        inactivityIntervalRef.current = setInterval(() => {
+          inactivityCountdownRef.current -= 1;
+          console.log(`[InactivityTimer] Countdown: ${inactivityCountdownRef.current}s`);
+        }, 1000);
+        inactivityTimeoutRef.current = setTimeout(() => {
+          console.log('[InactivityTimer] Timer expired, closing avatar stream');
+          clearInactivityTimers();
+          terminateAvatarSession();
+        }, 30000);
+      }
+    }
+    window.addEventListener('keydown', resetInactivityTimer);
+    window.addEventListener('mousedown', resetInactivityTimer);
+    return () => {
+      window.removeEventListener('keydown', resetInactivityTimer);
+      window.removeEventListener('mousedown', resetInactivityTimer);
+    };
+  }, []);
+
   return (
     <div className="fixed inset-0 bg-black flex flex-col z-50">
       {/* Top bar with controls */}
@@ -571,17 +761,43 @@ export default function AvatarVideoStream({ avatarName, onClose }: AvatarVideoSt
       )}
 
       {/* Video container */}
-      <div className="flex-1 relative">
+      <div className="h-screen relative">
+        {/* Idle Video (always present, visible in 'idle' phase) */}
+        <IdleVideoPlayer
+          idleVideoUrl={idleVideoUrl}
+          onVideoEnd={handleIdleVideoEnd}
+          onError={handleIdleVideoError}
+          style={{ display: phase === 'idle' ? 'block' : 'none' }}
+          loop={!pendingTransitionToLive}
+          videoRef={idleVideoRef}
+        />
+        {/* to_live Video (always present, visible in 'to_live' phase) */}
+        <video
+          ref={toLiveVideoRef}
+          className="w-full h-full object-contain absolute inset-0"
+          style={{ display: phase === 'to_live' ? 'block' : 'none' }}
+          onEnded={handleToLiveVideoEnd}
+          playsInline
+        />
+        {/* Avatar Stream Video (always present, visible in 'stream' phase) */}
         <video
           ref={videoRef}
           className="w-full h-full object-cover absolute top-0 left-0"
           autoPlay
           playsInline
+          style={{ display: phase === 'stream' ? 'block' : 'none' }}
         />
         <canvas
           ref={canvasRef}
           className="w-full h-full object-cover absolute top-0 left-0 pointer-events-none"
+          style={{ display: phase === 'stream' ? 'block' : 'none' }}
         />
+        {/* Spinner if avatar stream not ready after to_live video ends */}
+        {phase === 'stream' && !isAvatarStreamReady && (
+          <div className="w-full h-full flex items-center justify-center bg-black absolute top-0 left-0">
+            <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-white"></div>
+          </div>
+        )}
       </div>
     </div>
   );

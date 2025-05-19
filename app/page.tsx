@@ -24,7 +24,7 @@ export default function Dashboard() {
       // Fetch avatars
       const { data, error: avatarError } = await supabase
         .from('avatars')
-        .select('avatar_id, avatar_name, avatar_preview_image_url');
+        .select('avatar_id, avatar_name, avatar_preview_image_url, idle_video_path, to_live_video_path, to_idle_video_path');
       if (avatarError) {
         setAvatars([]);
       } else {
@@ -127,6 +127,9 @@ export default function Dashboard() {
       {selectedAvatar && (
         <AvatarVideoStream
           avatarName={selectedAvatar}
+          idleVideoUrl={avatars.find(a => a.avatar_id === selectedAvatar)?.idle_video_path || ''}
+          toLiveVideoUrl={avatars.find(a => a.avatar_id === selectedAvatar)?.to_live_video_path || ''}
+          toIdleVideoUrl={avatars.find(a => a.avatar_id === selectedAvatar)?.to_idle_video_path || ''}
           onClose={() => setSelectedAvatar(null)}
         />
       )}
