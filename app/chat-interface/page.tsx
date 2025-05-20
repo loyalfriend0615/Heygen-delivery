@@ -6,7 +6,6 @@ import Toast from '../components/Toast';
 import AvatarVideoStream from '../components/AvatarVideoStream';
 import ChromaKeyPanel from '../components/ChromaKeyPanel';
 import AudioHandler from '../components/AudioHandler';
-import AudioVisualizer from '../components/AudioVisualizer';
 import AudioSignalAnimation from '../components/AudioSignalAnimation';
 
 // Custom events for communication

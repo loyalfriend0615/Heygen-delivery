@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import DarkModeToggle from './DarkModeToggle';
 import ClipLoader from 'react-spinners/ClipLoader';
 import AvatarVideoStream from './components/AvatarVideoStream';
+import { MessageSquare, LogOut } from 'lucide-react';
 
 export default function Dashboard() {
   const [avatars, setAvatars] = useState<any[]>([]);
@@ -71,8 +72,9 @@ export default function Dashboard() {
           </div>
           <button
             onClick={handleLogout}
-            className="bg-red-500 text-white py-2 px-4 rounded ml-2"
+            className="bg-red-500 text-white py-2 px-4 rounded ml-2 flex items-center gap-2"
           >
+            <LogOut className="w-5 h-5" />
             Logout
           </button>
         </div>
@@ -113,10 +115,7 @@ export default function Dashboard() {
               onClick={() => handleChat(avatar.avatar_id)}
               className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-20 bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-lg font-medium shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200"
             >
-              <svg className="inline-block mr-2" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <rect x="3" y="5" width="18" height="14" rx="2" fill="currentColor" opacity=".2" />
-                <path d="M21 5v14H3V5h18zm-2 2H5v10h14V7z" fill="currentColor" />
-              </svg>
+              <MessageSquare className="inline-block mr-2 w-5 h-5" />
               Chat
             </button>
           </div>
