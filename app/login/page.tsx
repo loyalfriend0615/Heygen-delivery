@@ -3,7 +3,7 @@
 "use client";
 
 import { useState } from 'react';
-import { supabase } from '@/lib/supabaseClient';
+import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
 
 const Login = () => {
@@ -12,6 +12,7 @@ const Login = () => {
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const router = useRouter();
+    const supabase = createClient();
 
     const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();

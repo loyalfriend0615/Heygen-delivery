@@ -63,11 +63,11 @@ export default function ChatInterface() {
       if (event.key === 'avatarSpeakingStatus' && event.newValue) {
         try {
           const { status } = JSON.parse(event.newValue);
-          if (status === 'started') {
-            setIsLoading(true);
-          } else if (status === 'ended') {
-            setIsLoading(false);
-            currentQuestionRef.current = '';
+            if (status === 'started') {
+              setIsLoading(true);
+            } else if (status === 'ended') {
+              setIsLoading(false);
+              currentQuestionRef.current = '';
           }
         } catch (e) {}
       }

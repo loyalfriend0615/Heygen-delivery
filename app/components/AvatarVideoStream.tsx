@@ -217,16 +217,16 @@ export default function AvatarVideoStream({ avatarName, idleVideoUrl, toLiveVide
 
   // Make avatar speak the pending response when in stream phase
   const speakPendingResponse = async () => {
-    console.log("[AvatarVideoStream] Checking if should speak pending response:", {
-      hasPendingResponse: !!pendingResponse,
-      hasAvatar: !!avatar,
-      phase
+    console.log("[AvatarVideoStream] Checking if should speak pending response:", { 
+      hasPendingResponse: !!pendingResponse, 
+      hasAvatar: !!avatar, 
+      phase 
     });
     if (!pendingResponse || !avatar || phase !== 'stream') {
-      console.log("[AvatarVideoStream] Not ready to speak:", {
-        pendingResponse: !!pendingResponse,
-        avatar: !!avatar,
-        phase
+      console.log("[AvatarVideoStream] Not ready to speak:", { 
+        pendingResponse: !!pendingResponse, 
+        avatar: !!avatar, 
+        phase 
       });
       return;
     }
@@ -406,7 +406,7 @@ export default function AvatarVideoStream({ avatarName, idleVideoUrl, toLiveVide
       if (avatarRef.current) {
         console.log('[Cleanup][DEBUG] Calling avatarRef.current.stopAvatar()');
         await avatarRef.current.stopAvatar();
-        setAvatar(null);
+      setAvatar(null);
         avatarRef.current = null;
         delete (window as any).avatar;
       }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabaseClient';
+import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
 import DarkModeToggle from './DarkModeToggle';
 import ClipLoader from 'react-spinners/ClipLoader';
@@ -13,6 +13,7 @@ export default function Dashboard() {
   const [isLoading, setIsLoading] = useState(true);
   const [selectedAvatar, setSelectedAvatar] = useState<string | null>(null);
   const router = useRouter();
+  const supabase = createClient();
 
   useEffect(() => {
     const fetchAvatars = async () => {
@@ -34,7 +35,7 @@ export default function Dashboard() {
       setIsLoading(false);
     };
     fetchAvatars();
-  }, [router]);
+  }, [router, supabase]);
 
   const handleLogout = async () => {
     const { error } = await supabase.auth.signOut();
